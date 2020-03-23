@@ -27,7 +27,7 @@ for j=1:num_messages
 end
 
 % Теоретический расчет
-SNRdB = -10:10;
+SNRdB = -10:0;
 SNR = 10.^(SNRdB./10);
 Pe_bit_theor = qfunc(sqrt(2.*SNR));         
 Ped_theor_up = ones(1, length(SNR)).*1/2^r; 
@@ -46,6 +46,7 @@ end
 % Моделирование
 Pe_bit = zeros(1,length(SNRdB));  % Вероятность ошибки на бит
 Pe_bit_after_Hamming = zeros(1,length(SNRdB));
+Pe_bit_after_Hamming_soft = zeros(1,length(SNRdB));
 Ped = zeros(1,length(SNRdB));     % Вероятность ошибки декодирования
 Ped_soft = zeros(1,length(SNRdB));% Вероятность ошибки декодирования soft
 T = zeros(1,length(SNRdB));       % Пропускная способность канала
@@ -54,7 +55,7 @@ for i=1:length(SNR)
     sigma = sqrt(1/(2*SNR(i)));
     nTests = 0; nSent = 0;
     nErrDecode = 0; nErrDecode_soft = 0;
-    nErrBits = 0; nErrBits_H = 0;
+    nErrBits = 0; nErrBits_H = 0; nErrBits_H_soft = 0;
     messages_to_send = 0;
     while messages_to_send < 10*(SNR(i)+11)
         messages_to_send = messages_to_send + 1;
@@ -64,14 +65,17 @@ for i=1:length(SNR)
             nTests = nTests + 1;
             AWGN = c + sigma*randn(3, 12);
             
-            [corrected, nErrBits] = correctError(AWGN, H, c);
+            [corrected, nErr] = correctError(AWGN, H, c);
+            nErrBits = nErrBits + nErr;
             soft_corrected = correctSoft(AWGN, channel_3_12, mes_3_11);
+            
             
             [~, S] = gfdeconv(corrected, g_x); 
             v = sum(xor(codewords(rand_ind, :), corrected));
             nErrBits_H = nErrBits_H + v;
             [~, S_soft] = gfdeconv(soft_corrected, g_x);
             v_soft = sum(xor(codewords(rand_ind, :), soft_corrected));
+            nErrBits_H_soft = nErrBits_H_soft + v_soft;
             
             if (bi2de(S_soft) == 0) && (v_soft > 0)
                 nErrDecode_soft = nErrDecode_soft + 1;
@@ -85,14 +89,12 @@ for i=1:length(SNR)
                 break;
             end
         end
-%         if nErrDecode == 0
-%             messages_to_send = messages_to_send - 1;
-%         end
     end
     Ped(i) = nErrDecode/nTests;
     Ped_soft(i) = nErrDecode_soft/nTests;
     Pe_bit(i) = nErrBits/(nTests*36);
     Pe_bit_after_Hamming(i) = nErrBits_H/(nTests*24);
+    Pe_bit_after_Hamming_soft(i) = nErrBits_H_soft/(nTests*24);
     T(i) = k * nSent / (36 * nTests);
 end
 
@@ -104,10 +106,12 @@ semilogy(SNRdB, Ped, 'ko', ...
          SNRdB, Ped_theor, 'b.-')
 legend('Ped', 'Ped soft', 'Ped theor up', 'Ped theor');
 subplot(2, 2, 3);
-semilogy(SNRdB, Pe_bit, 'ko', ...
-         SNRdB, Pe_bit_after_Hamming, 'ro', ...
+semilogy(SNRdB, Pe_bit, 'k', ...
+         SNRdB, Pe_bit_after_Hamming, 'r.--', ...
+         SNRdB, Pe_bit_after_Hamming_soft, 'r.-', ...
          SNRdB, Pe_bit_theor, 'b.-');
-legend('Pe bit', 'Pe bit after Hamming', 'Pe bit theor');
+legend('Pe bit', 'Pe bit after Hamming', ...
+       'Pe bit after Hamming soft', 'Pe bit theor');
 xlabel('E/N_0, dB')
 subplot(1, 2, 2);
 plot(SNRdB, T, 'b.-');
@@ -116,7 +120,6 @@ xlabel('E/N_0, dB')
 
 % Синдромное декодирование
 function [concatenated, nErrBits] = correctError(AWGN, H, c)
-
 	unBPSK = AWGN < 0;
     nErrBits = sum(sum(xor(c < 0, unBPSK)));
     plus_zeros = [unBPSK(:, :) [0 0 0; 0 0 0; 0 0 0]];
@@ -188,7 +191,6 @@ end
 
 % Soft-декодер
 function [concatenated] = correctSoft(AWGN, h, m)
-
     min_d = [100 100 100];
     corrected = reshape(m(1, :, :), 3, 11);
     for j=1:256
