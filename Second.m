@@ -26,6 +26,13 @@ for j=1:num_messages
     end
 end
 
+all_codewords = de2bi((0:(2^8-1))');
+h = zeros(2^8, 12);
+for j=1:2^8
+    temp = mod([all_codewords(j, :) 0 0 0] * G, 2);
+    h(j, :) = temp(1, 1:end-3) .*(-2) + 1;
+end
+
 % Теоретический расчет
 SNRdB = -10:0;
 SNR = 10.^(SNRdB./10);
@@ -65,17 +72,18 @@ for i=1:length(SNR)
             nTests = nTests + 1;
             AWGN = c + sigma*randn(3, 12);
             
-            [corrected, nErr] = correctError(AWGN, H, c);
+            [corrected, nErr, v] = correctError(AWGN, H, c);
             nErrBits = nErrBits + nErr;
-            soft_corrected = correctSoft(AWGN, channel_3_12, mes_3_11);
-            
+            nErrBits_H = nErrBits_H + v;
+            [soft_corrected, v_soft] = ...
+                correctSoft(AWGN, h, all_codewords, c);
+            nErrBits_H_soft = nErrBits_H_soft + v_soft;
             
             [~, S] = gfdeconv(corrected, g_x); 
             v = sum(xor(codewords(rand_ind, :), corrected));
-            nErrBits_H = nErrBits_H + v;
+            
             [~, S_soft] = gfdeconv(soft_corrected, g_x);
             v_soft = sum(xor(codewords(rand_ind, :), soft_corrected));
-            nErrBits_H_soft = nErrBits_H_soft + v_soft;
             
             if (bi2de(S_soft) == 0) && (v_soft > 0)
                 nErrDecode_soft = nErrDecode_soft + 1;
@@ -93,8 +101,8 @@ for i=1:length(SNR)
     Ped(i) = nErrDecode/nTests;
     Ped_soft(i) = nErrDecode_soft/nTests;
     Pe_bit(i) = nErrBits/(nTests*36);
-    Pe_bit_after_Hamming(i) = nErrBits_H/(nTests*24);
-    Pe_bit_after_Hamming_soft(i) = nErrBits_H_soft/(nTests*24);
+    Pe_bit_after_Hamming(i) = nErrBits_H/(nTests*36);
+    Pe_bit_after_Hamming_soft(i) = nErrBits_H_soft/(nTests*36);
     T(i) = k * nSent / (36 * nTests);
 end
 
@@ -119,11 +127,11 @@ ylabel('T, пропускная способность');
 xlabel('E/N_0, dB')
 
 % Синдромное декодирование
-function [concatenated, nErrBits] = correctError(AWGN, H, c)
+function [concatenated, nErrBits, v] = correctError(AWGN, H, c)
 	unBPSK = AWGN < 0;
     nErrBits = sum(sum(xor(c < 0, unBPSK)));
     plus_zeros = [unBPSK(:, :) [0 0 0; 0 0 0; 0 0 0]];
-    corrected = zeros(3, 11);
+    corrected = zeros(3, 12);
     
     % Позиции ошибок, полученные перебором синдромов, по порядку,
     % соответствующему порядку синдромов в десятичном виде (1-15),
@@ -182,30 +190,31 @@ function [concatenated, nErrBits] = correctError(AWGN, H, c)
             case 15
                 corr = gfadd(corr,[0 0 0 0 0 0 0 0 0 0 0 0 1 0 0]);
         end
-        corrected(part, :) = corr(1, 5:end);
+        corrected(part, :) = corr(1, 1:end-3);
     end
-    concatenated = [corrected(1, 1:end-3) ...
-                    corrected(2, 1:end-3) ...
-                    corrected(3, 1:end-3)];
+    v = sum(sum(xor(corrected, c<0)));
+    concatenated = [corrected(1, 5:end) ...
+                    corrected(2, 5:end) ...
+                    corrected(3, 5:end)];
 end
 
 % Soft-декодер
-function [concatenated] = correctSoft(AWGN, h, m)
+function [concatenated, v] = correctSoft(AWGN, h, codes, c)
     min_d = [100 100 100];
-    corrected = reshape(m(1, :, :), 3, 11);
+    corrected = codes(1, :);
+    cor = zeros(3, 12);
     for j=1:256
-        for i=1:3
-            for AWGN_part=1:3
-                min = sqrt(sum((AWGN(AWGN_part, :) - ...
-                                reshape(h(j, i, :), 1, 12)).^2));
-                if min < min_d(AWGN_part)
-                    min_d(AWGN_part) = min;
-                    corrected(AWGN_part, :) = reshape(m(j, i, :), 1, 11);
-                end
+        for AWGN_part=1:3
+            min = sqrt(sum((AWGN(AWGN_part, :) - h(j, :)).^2));
+            if min < min_d(AWGN_part)
+                min_d(AWGN_part) = min;
+                corrected(AWGN_part, :) = codes(j, :);
+                cor(AWGN_part, :) = h(j, :);
             end
         end
     end
-    concatenated = [corrected(1, 1:end-3) ...
-                    corrected(2, 1:end-3) ...
-                    corrected(3, 1:end-3)];
+    v = sum(sum(xor(cor<0, c<0)));
+    concatenated = [corrected(1, :) ...
+                    corrected(2, :) ...
+                    corrected(3, :)];
 end
